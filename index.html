@@ -2,8 +2,8 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Weekly RSI Divergence Analyzer</title>
-  <!-- Load Chart.js -->
+  <title>Weekly RSI Divergence Analyzer (Calendar Weeks + Last 10 Pivot Detection)</title>
+  <!-- Load Chart.js from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
@@ -20,7 +20,10 @@
       border-radius: 8px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
-    h1 { text-align: center; color: #333; }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -31,7 +34,9 @@
       padding: 8px;
       text-align: center;
     }
-    th { background-color: #eaeaea; }
+    th {
+      background-color: #eaeaea;
+    }
     input[type="text"] {
       width: 300px;
       padding: 8px;
@@ -51,15 +56,20 @@
       background-color: #aaa;
       cursor: not-allowed;
     }
-    #manualAdd { margin-top: 20px; }
+    #manualAdd {
+      margin-top: 20px;
+    }
     /* Popup styling */
     #popup {
       position: fixed;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       background: rgba(0,0,0,0.5);
       display: none;
-      align-items: center; justify-content: center;
+      align-items: center;
+      justify-content: center;
     }
     #popupContentContainer {
       background: #fff;
@@ -79,7 +89,9 @@
       font-weight: bold;
       font-size: 18px;
     }
-    #chartContainer { margin-top: 20px; }
+    #chartContainer {
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
@@ -96,13 +108,13 @@
         </tr>
       </thead>
       <tbody id="coinTableBody">
-        <!-- Top 150 coin rows will be auto‑generated here -->
+        <!-- Rows will be injected here -->
       </tbody>
     </table>
     
     <div id="manualAdd">
-      <label for="addCoinInput"><strong>Add Coin (by CoinGecko ID, e.g. bitcoin):</strong></label>
-      <input type="text" id="addCoinInput" placeholder="Enter coin id">
+      <label for="addCoinInput"><strong>Add Coin (by symbol, e.g. BTC):</strong></label>
+      <input type="text" id="addCoinInput" placeholder="Enter symbol">
       <button id="addCoinButton">Add Coin</button>
     </div>
   </div>
@@ -112,13 +124,12 @@
     <div id="popupContentContainer">
       <span id="popupClose">&times;</span>
       <div id="popupContent">
-        <!-- Detailed weekly data and chart will appear here -->
+        <!-- Weekly data table and chart will appear here -->
       </div>
     </div>
   </div>
   
   <script>
-    // Global storage for analysis details (keyed by coin ID)
     let coinAnalysisData = {};
     let popupChart = null;
     
@@ -128,37 +139,45 @@
       document.getElementById('popupClose').addEventListener('click', closePopup);
     });
     
-    // Fetch top 150 coins from CoinGecko by market cap
+    // Fetch top 150 coins by market cap from CryptoCompare
     function fetchTopCoins() {
-      fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=1&sparkline=false')
+      fetch('https://min-api.cryptocompare.com/data/top/mktcapfull?limit=150&tsym=USD')
       .then(response => response.json())
       .then(data => {
+        if (!data.Data) {
+          console.error('Error fetching top coins:', data);
+          return;
+        }
         let tableBody = document.getElementById('coinTableBody');
-        data.forEach(coin => {
+        data.Data.forEach(item => {
+          let coinInfo = item.CoinInfo;
+          let symbol = coinInfo.Name;      // e.g. "BTC"
+          let name = coinInfo.FullName;    // e.g. "Bitcoin (BTC)"
+          
           let row = document.createElement('tr');
-          row.setAttribute('data-coin-id', coin.id);
+          row.setAttribute('data-coin-symbol', symbol);
           row.innerHTML = `
-            <td>${coin.name}</td>
-            <td>${coin.symbol.toUpperCase()}</td>
+            <td>${name}</td>
+            <td>${symbol}</td>
             <td class="divergence">Loading...</td>
             <td><button class="detailsButton" disabled>Details</button></td>
           `;
           tableBody.appendChild(row);
-          // Analyze coin data (asynchronously)
-          analyzeCoinData(coin.id, coin.name, function(result) {
+          
+          analyzeCoinData(symbol, name, function(result) {
             if (result.error) {
-              updateRow(coin.id, "No Divergence");
+              updateRow(symbol, "No Divergence");
             } else {
-              updateRow(coin.id, result.divergence);
-              coinAnalysisData[coin.id] = {
-                name: coin.name,
-                weeklyData: result.weeklyData  // full weekly data with RSI attached
+              updateRow(symbol, result.divergence);
+              coinAnalysisData[symbol] = {
+                name: name,
+                weeklyData: result.weeklyData // full weekly data with RSI
               };
-              let rowElem = document.querySelector(`tr[data-coin-id="${coin.id}"]`);
+              let rowElem = document.querySelector(`tr[data-coin-symbol="${symbol}"]`);
               let detailsButton = rowElem.querySelector('.detailsButton');
               detailsButton.disabled = false;
               detailsButton.addEventListener('click', function() {
-                openPopup(coin.id);
+                openPopup(symbol);
               });
             }
           });
@@ -169,130 +188,136 @@
       });
     }
     
-    function updateRow(coinId, divergence) {
-      let row = document.querySelector(`tr[data-coin-id="${coinId}"]`);
+    function updateRow(symbol, divergence) {
+      let row = document.querySelector(`tr[data-coin-symbol="${symbol}"]`);
       if (row) {
         row.querySelector('.divergence').innerText = divergence;
       }
     }
     
-    // Manual add coin (by CoinGecko ID)
+    // Manual add coin by symbol
     function manualAddCoin() {
       let input = document.getElementById('addCoinInput');
-      let coinId = input.value.trim().toLowerCase();
-      if (!coinId) return;
-      if (document.querySelector(`tr[data-coin-id="${coinId}"]`)) {
+      let symbol = input.value.trim().toUpperCase();
+      if (!symbol) return;
+      
+      if (document.querySelector(`tr[data-coin-symbol="${symbol}"]`)) {
         alert('Coin already exists in the table.');
         input.value = '';
         return;
       }
+      
       let tableBody = document.getElementById('coinTableBody');
       let row = document.createElement('tr');
-      row.setAttribute('data-coin-id', coinId);
+      row.setAttribute('data-coin-symbol', symbol);
       row.innerHTML = `
-        <td>${coinId.toUpperCase()}</td>
-        <td>${coinId.toUpperCase()}</td>
+        <td>${symbol}</td>
+        <td>${symbol}</td>
         <td class="divergence">Loading...</td>
         <td><button class="detailsButton" disabled>Details</button></td>
       `;
       tableBody.appendChild(row);
       input.value = '';
       
-      analyzeCoinData(coinId, coinId.toUpperCase(), function(result) {
+      analyzeCoinData(symbol, symbol, function(result) {
         if (result.error) {
-          updateRow(coinId, "No Divergence");
+          updateRow(symbol, "No Divergence");
         } else {
-          updateRow(coinId, result.divergence);
-          coinAnalysisData[coinId] = {
-            name: coinId.toUpperCase(),
+          updateRow(symbol, result.divergence);
+          coinAnalysisData[symbol] = {
+            name: symbol,
             weeklyData: result.weeklyData
           };
-          let rowElem = document.querySelector(`tr[data-coin-id="${coinId}"]`);
+          let rowElem = document.querySelector(`tr[data-coin-symbol="${symbol}"]`);
           let detailsButton = rowElem.querySelector('.detailsButton');
           detailsButton.disabled = false;
           detailsButton.addEventListener('click', function() {
-            openPopup(coinId);
+            openPopup(symbol);
           });
         }
       });
     }
     
-    // Analyze coin data:
-    // 1. Fetch daily price data (days=max) from CoinGecko.
-    // 2. Group daily data into ISO calendar weeks.
-    // 3. Compute 14-period RSI.
-    // 4. In the LAST 10 weekly candles, detect two main pivot highs (for bearish divergence) or two main pivot lows (for bullish divergence).
-    function analyzeCoinData(coinId, coinName, callback) {
-      fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=max`)
+    // Fetch ~365 days daily data, group by ISO weeks, compute RSI, detect divergence in last 10 candles
+    function analyzeCoinData(symbol, coinName, callback) {
+      fetch(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${symbol}&tsym=USD&limit=365`)
       .then(response => response.json())
       .then(data => {
-        if (!data.prices || data.prices.length === 0) {
+        if (data.Response !== "Success" || !data.Data?.Data || data.Data.Data.length === 0) {
           callback({ error: true });
           return;
         }
-        // data.prices: [ [timestamp, price], ... ]
-        let dailyData = data.prices.map(item => ({
-          timestamp: item[0],
-          close: item[1]
+        
+        let dailyData = data.Data.Data.map(d => ({
+          timestamp: d.time * 1000,
+          close: d.close
         }));
-        dailyData.sort((a, b) => a.timestamp - b.timestamp);
+        dailyData.sort((a,b) => a.timestamp - b.timestamp);
         
-        // Group daily data into ISO calendar weeks
         let weeklyData = groupByCalendarWeek(dailyData);
-        if (weeklyData.length < 10) {
+        if (weeklyData.length < 2) {
           callback({ error: true });
           return;
         }
         
-        // Compute 14-period RSI on weekly closing prices
+        // Compute RSI
         let closes = weeklyData.map(w => w.close);
         let rsiArr = computeRSI(closes, 14);
+        
         // Attach RSI to each weekly candle
         let fullWeeklyData = weeklyData.map((w, i) => ({
           ...w,
           rsi: rsiArr[i]
         }));
         
-        // Look at the last 10 weekly candles for pivot detection
+        // We'll detect divergence in the LAST 10 weekly candles
         let last10 = fullWeeklyData.slice(-10);
         if (last10.length < 2) {
           callback({ error: true });
           return;
         }
         
-        // Detect pivot highs and pivot lows (simple method: candle higher/lower than its immediate neighbors)
+        // Find pivot highs/lows within these last 10
         let pivotHighs = [];
         let pivotLows = [];
+        // We'll check i from 1..(length-2) in the last10 array
+        // but we need the index in last10, plus the overall index
         for (let i = 1; i < last10.length - 1; i++) {
-          if (last10[i].close > last10[i-1].close && last10[i].close > last10[i+1].close) {
+          let prevClose = last10[i-1].close;
+          let currClose = last10[i].close;
+          let nextClose = last10[i+1].close;
+          
+          if (currClose > prevClose && currClose > nextClose) {
             pivotHighs.push(i);
           }
-          if (last10[i].close < last10[i-1].close && last10[i].close < last10[i+1].close) {
+          if (currClose < prevClose && currClose < nextClose) {
             pivotLows.push(i);
           }
         }
         
-        // Check last two pivot highs for bearish divergence:
-        // Price: higher high; RSI: lower high.
+        // Check for last two pivot highs → Bearish Divergence
         let isBearish = false;
         if (pivotHighs.length >= 2) {
           let h1 = pivotHighs[pivotHighs.length - 2];
           let h2 = pivotHighs[pivotHighs.length - 1];
-          let price1 = last10[h1].close, price2 = last10[h2].close;
-          let rsi1 = last10[h1].rsi, rsi2 = last10[h2].rsi;
+          let price1 = last10[h1].close;
+          let price2 = last10[h2].close;
+          let rsi1 = last10[h1].rsi;
+          let rsi2 = last10[h2].rsi;
           if (price2 > price1 && rsi2 < rsi1) {
             isBearish = true;
           }
         }
         
-        // Check last two pivot lows for bullish divergence:
-        // Price: lower low; RSI: higher low.
+        // Check for last two pivot lows → Bullish Divergence
         let isBullish = false;
         if (pivotLows.length >= 2) {
           let l1 = pivotLows[pivotLows.length - 2];
           let l2 = pivotLows[pivotLows.length - 1];
-          let price1 = last10[l1].close, price2 = last10[l2].close;
-          let rsi1 = last10[l1].rsi, rsi2 = last10[l2].rsi;
+          let price1 = last10[l1].close;
+          let price2 = last10[l2].close;
+          let rsi1 = last10[l1].rsi;
+          let rsi2 = last10[l2].rsi;
           if (price2 < price1 && rsi2 > rsi1) {
             isBullish = true;
           }
@@ -301,7 +326,7 @@
         let divergence = "No Divergence";
         if (isBearish && !isBullish) divergence = "Bearish Divergence";
         else if (!isBearish && isBullish) divergence = "Bullish Divergence";
-        else if (isBearish && isBullish) divergence = "Both Divergences";
+        else if (isBearish && isBullish) divergence = "Both Bearish & Bullish";
         
         callback({
           divergence: divergence,
@@ -309,19 +334,18 @@
         });
       })
       .catch(err => {
-        console.error('Error analyzing coin data for', coinId, err);
+        console.error('Error analyzing coin data for', symbol, err);
         callback({ error: true });
       });
     }
     
-    // Group daily data into official ISO calendar weeks.
-    // For each week (Monday–Sunday), the weekly close is the last day's close.
+    // Group daily data by official ISO calendar week
     function groupByCalendarWeek(dailyData) {
       let weeksMap = {};
       dailyData.forEach(d => {
         let date = new Date(d.timestamp);
         let [year, week] = getISOWeek(date);
-        let key = `${year}-${week < 10 ? '0' + week : week}`;
+        let key = `${year}-${week}`;
         if (!weeksMap[key]) {
           weeksMap[key] = [];
         }
@@ -341,57 +365,72 @@
       return weeklyData;
     }
     
-    // ISO week calculation (returns [year, weekNumber])
+    // ISO week calculation that handles year rollover properly
+    // Source: https://stackoverflow.com/a/6117889
     function getISOWeek(date) {
-      let d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-      let dayNum = d.getUTCDay() || 7;
-      d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-      let yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
-      let weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-      return [d.getUTCFullYear(), weekNo];
+      let dateCopy = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+      // shift to Thursday in current week
+      let day = dateCopy.getUTCDay() || 7;
+      dateCopy.setUTCDate(dateCopy.getUTCDate() + 4 - day);
+      let yearStart = new Date(Date.UTC(dateCopy.getUTCFullYear(), 0, 1));
+      let weekNo = Math.ceil((((dateCopy - yearStart) / 86400000) + 1) / 7);
+      return [dateCopy.getUTCFullYear(), weekNo];
     }
     
-    // Compute RSI (Wilder's smoothing) with a given period.
-    // If an RSI computes as 0 (or extremely close), treat it as NaN.
+    // Compute RSI with Wilder's method, ignoring any RSI=0 (treat as NaN)
     function computeRSI(closes, period) {
       let rsi = [];
       if (closes.length < 2) return closes.map(() => NaN);
-      let gains = [], losses = [];
+      
+      let gains = [];
+      let losses = [];
       for (let i = 1; i < closes.length; i++) {
-        let change = closes[i] - closes[i-1];
+        let change = closes[i] - closes[i - 1];
         gains.push(change > 0 ? change : 0);
         losses.push(change < 0 ? Math.abs(change) : 0);
       }
+      
       let avgGain = average(gains.slice(0, period));
       let avgLoss = average(losses.slice(0, period));
       let firstRSI = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+      // If it's effectively zero, treat as NaN
       if (Math.abs(firstRSI) < 1e-6) firstRSI = NaN;
-      for (let i = 0; i < period; i++) rsi.push(NaN);
+      
+      // pad the first "period" with NaN
+      for (let i = 0; i < period; i++) {
+        rsi.push(NaN);
+      }
       rsi.push(firstRSI);
+      
       for (let i = period + 1; i < closes.length; i++) {
-        let change = closes[i] - closes[i-1];
+        let change = closes[i] - closes[i - 1];
         let gain = change > 0 ? change : 0;
         let loss = change < 0 ? Math.abs(change) : 0;
         avgGain = ((avgGain * (period - 1)) + gain) / period;
         avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+        
         let currRSI = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+        // ignore RSI=0
         if (Math.abs(currRSI) < 1e-6) currRSI = NaN;
+        
         rsi.push(currRSI);
       }
-      while (rsi.length < closes.length) rsi.push(NaN);
+      
+      while (rsi.length < closes.length) {
+        rsi.push(NaN);
+      }
       return rsi;
     }
     
     function average(arr) {
-      return arr.length ? arr.reduce((sum, val) => sum + val, 0) / arr.length : 0;
+      return arr.length === 0 ? 0 : arr.reduce((sum, val) => sum + val, 0) / arr.length;
     }
     
-    // Popup: Show a table of the entire weekly data plus a line chart.
-    // The chart uses dual y-axes with the RSI axis fixed from 30 to 85.
-    function openPopup(coinId) {
+    // Open popup with a table of all weekly data + chart
+    function openPopup(symbol) {
       let popup = document.getElementById('popup');
       let popupContent = document.getElementById('popupContent');
-      let analysis = coinAnalysisData[coinId];
+      let analysis = coinAnalysisData[symbol];
       if (!analysis) return;
       
       let html = `<h2>${analysis.name} Weekly Data</h2>`;
@@ -405,7 +444,7 @@
         html += `<tr>
                    <td>${item.week}</td>
                    <td>${item.close.toFixed(2)}</td>
-                   <td>${isNaN(item.rsi) ? '' : item.rsi.toFixed(2)}</td>
+                   <td>${(isNaN(item.rsi) ? '' : item.rsi.toFixed(2))}</td>
                  </tr>`;
       });
       html += `</table>`;
@@ -415,7 +454,7 @@
       popup.style.display = 'flex';
       
       let ctx = document.getElementById('chartCanvas').getContext('2d');
-      if (popupChart) popupChart.destroy();
+      if (popupChart) { popupChart.destroy(); }
       
       let labels = analysis.weeklyData.map(w => w.week);
       let prices = analysis.weeklyData.map(w => w.close);
