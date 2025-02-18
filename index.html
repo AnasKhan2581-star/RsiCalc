@@ -218,10 +218,10 @@
     }
     
     // Analyze coin data:
-    // 1. Fetch daily price data (using days=max) from CoinGecko.
+    // 1. Fetch daily price data (days=max) from CoinGecko.
     // 2. Group daily data into ISO calendar weeks.
-    // 3. Compute 14-period RSI on the weekly closes.
-    // 4. Examine the last 10 weekly candles for pivot detection.
+    // 3. Compute 14-period RSI.
+    // 4. In the LAST 10 weekly candles, detect two main pivot highs (for bearish divergence) or two main pivot lows (for bullish divergence).
     function analyzeCoinData(coinId, coinName, callback) {
       fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=max`)
       .then(response => response.json())
@@ -230,37 +230,37 @@
           callback({ error: true });
           return;
         }
-        // Convert data.prices: [timestamp, price] into objects.
+        // data.prices: [ [timestamp, price], ... ]
         let dailyData = data.prices.map(item => ({
           timestamp: item[0],
           close: item[1]
         }));
         dailyData.sort((a, b) => a.timestamp - b.timestamp);
         
-        // Group daily data into ISO calendar weeks.
+        // Group daily data into ISO calendar weeks
         let weeklyData = groupByCalendarWeek(dailyData);
         if (weeklyData.length < 10) {
           callback({ error: true });
           return;
         }
         
-        // Compute 14-period RSI on weekly closing prices.
+        // Compute 14-period RSI on weekly closing prices
         let closes = weeklyData.map(w => w.close);
         let rsiArr = computeRSI(closes, 14);
-        // Attach RSI to each weekly candle.
+        // Attach RSI to each weekly candle
         let fullWeeklyData = weeklyData.map((w, i) => ({
           ...w,
           rsi: rsiArr[i]
         }));
         
-        // Look at the last 10 weekly candles for pivot detection.
+        // Look at the last 10 weekly candles for pivot detection
         let last10 = fullWeeklyData.slice(-10);
         if (last10.length < 2) {
           callback({ error: true });
           return;
         }
         
-        // Detect pivot highs and pivot lows (a simple method: a candle is a pivot if its close is greater/less than its immediate neighbors).
+        // Detect pivot highs and pivot lows (simple method: candle higher/lower than its immediate neighbors)
         let pivotHighs = [];
         let pivotLows = [];
         for (let i = 1; i < last10.length - 1; i++) {
@@ -272,8 +272,8 @@
           }
         }
         
-        // Check for bearish divergence using the last two pivot highs:
-        // Price makes a higher high, but RSI makes a lower high.
+        // Check last two pivot highs for bearish divergence:
+        // Price: higher high; RSI: lower high.
         let isBearish = false;
         if (pivotHighs.length >= 2) {
           let h1 = pivotHighs[pivotHighs.length - 2];
@@ -285,8 +285,8 @@
           }
         }
         
-        // Check for bullish divergence using the last two pivot lows:
-        // Price makes a lower low, but RSI makes a higher low.
+        // Check last two pivot lows for bullish divergence:
+        // Price: lower low; RSI: higher low.
         let isBullish = false;
         if (pivotLows.length >= 2) {
           let l1 = pivotLows[pivotLows.length - 2];
@@ -315,7 +315,7 @@
     }
     
     // Group daily data into official ISO calendar weeks.
-    // For each week (Monday–Sunday), the weekly close is taken from the last day in that week.
+    // For each week (Monday–Sunday), the weekly close is the last day's close.
     function groupByCalendarWeek(dailyData) {
       let weeksMap = {};
       dailyData.forEach(d => {
@@ -351,8 +351,8 @@
       return [d.getUTCFullYear(), weekNo];
     }
     
-    // Compute RSI using Wilder's smoothing with a given period.
-    // If an RSI computes as 0 (or nearly 0), treat it as NaN.
+    // Compute RSI (Wilder's smoothing) with a given period.
+    // If an RSI computes as 0 (or extremely close), treat it as NaN.
     function computeRSI(closes, period) {
       let rsi = [];
       if (closes.length < 2) return closes.map(() => NaN);
@@ -386,8 +386,8 @@
       return arr.length ? arr.reduce((sum, val) => sum + val, 0) / arr.length : 0;
     }
     
-    // Open popup: show a table of the entire weekly data plus a Chart.js line chart.
-    // The RSI axis is fixed between 30 and 85.
+    // Popup: Show a table of the entire weekly data plus a line chart.
+    // The chart uses dual y-axes with the RSI axis fixed from 30 to 85.
     function openPopup(coinId) {
       let popup = document.getElementById('popup');
       let popupContent = document.getElementById('popupContent');
