@@ -235,25 +235,25 @@
     }
     
     // Analyze coin data using CoinGecko's market_chart endpoint
-    // We request 200 days of data to ensure enough weeks (at least 19 weeks are needed).
+    // Using days=max to get the full history so that even older coins have many weeks of data.
     function analyzeCoinData(coinId, coinName, callback) {
-      fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=200`)
+      fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=max`)
       .then(response => response.json())
       .then(data => {
         if (!data.prices || data.prices.length === 0) {
           callback({ error: true });
           return;
         }
-        // data.prices is an array of [timestamp, price]. For days>90, CoinGecko returns daily data.
+        // data.prices is an array of [timestamp, price]. For long ranges, CoinGecko returns daily data.
         let dailyData = data.prices.map(item => ({
           timestamp: item[0],
           close: item[1]
         }));
         // Ensure data is sorted in ascending order (oldest first)
         dailyData.sort((a, b) => a.timestamp - b.timestamp);
-        // Group daily data into weekly candles (each group of 7 days)
+        // Group daily data into weekly candles (using consecutive groups of 7 days)
         let weeklyData = getWeeklyData(dailyData);
-        // For a 14-period RSI we need at least 19 weeks (14 + 5 valid weeks)
+        // For a 14-period RSI plus 5 valid weeks, require at least 19 weeks.
         if (weeklyData.length < 19) {
           callback({ error: true });
           return;
@@ -261,7 +261,7 @@
         const period = 14;
         let closingPrices = weeklyData.map(w => w.close);
         let rsiValues = computeRSI(closingPrices, period);
-        // Use the last 5 weekly candles for details/chart display
+        // Use only the last 5 weekly candles for details/chart display
         let last5Weeks = weeklyData.slice(-5);
         let last5RSI = rsiValues.slice(-5);
         let weeklyPrices = last5Weeks.map(w => w.close);
@@ -279,165 +279,4 @@
       });
     }
     
-    // Group daily data into weekly candles (using consecutive groups of 7 data points)
-    function getWeeklyData(dailyData) {
-      let weeks = [];
-      for (let i = 0; i < dailyData.length; i += 7) {
-        let weekSlice = dailyData.slice(i, i + 7);
-        if (weekSlice.length > 0) {
-          let lastEntry = weekSlice[weekSlice.length - 1];
-          weeks.push({
-            timestamp: lastEntry.timestamp,
-            close: lastEntry.close
-          });
-        }
-      }
-      return weeks;
-    }
-    
-    // Compute RSI using the standard Wilder method
-    function computeRSI(closes, period) {
-      let rsi = [];
-      let gains = [];
-      let losses = [];
-      for (let i = 1; i < closes.length; i++) {
-        let change = closes[i] - closes[i - 1];
-        gains.push(change > 0 ? change : 0);
-        losses.push(change < 0 ? Math.abs(change) : 0);
-      }
-      let avgGain = average(gains.slice(0, period));
-      let avgLoss = average(losses.slice(0, period));
-      let firstRSI = avgLoss === 0 ? 100 : 100 - (100 / (1 + (avgGain / avgLoss)));
-      for (let i = 0; i < period; i++) {
-        rsi.push(NaN);
-      }
-      rsi.push(firstRSI);
-      for (let i = period + 1; i < closes.length; i++) {
-        let change = closes[i] - closes[i - 1];
-        let gain = change > 0 ? change : 0;
-        let loss = change < 0 ? Math.abs(change) : 0;
-        avgGain = ((avgGain * (period - 1)) + gain) / period;
-        avgLoss = ((avgLoss * (period - 1)) + loss) / period;
-        let currentRSI = avgLoss === 0 ? 100 : 100 - (100 / (1 + (avgGain / avgLoss)));
-        rsi.push(currentRSI);
-      }
-      while (rsi.length < closes.length) {
-        rsi.push(NaN);
-      }
-      return rsi;
-    }
-    
-    function average(arr) {
-      return arr.length === 0 ? 0 : arr.reduce((sum, val) => sum + val, 0) / arr.length;
-    }
-    
-    // Determine divergence from the last 5 weekly candles:
-    // If RSI is rising (positive trend) while price is flat or falling → Bullish divergence;
-    // If RSI is falling while price is rising → Bearish divergence;
-    // Else, "No clear divergence".
-    function analyzeDivergence(weeks, rsiValues) {
-      if (weeks.length < 5 || rsiValues.length < 5) return 'Insufficient data';
-      let priceStart = weeks[0].close;
-      let priceEnd = weeks[weeks.length - 1].close;
-      let rsiStart = rsiValues[0];
-      let rsiEnd = rsiValues[rsiValues.length - 1];
-      let priceTrend = priceEnd - priceStart;
-      let rsiTrend = rsiEnd - rsiStart;
-      if (rsiTrend > 0 && priceTrend <= 0) return 'Bullish Divergence';
-      else if (rsiTrend < 0 && priceTrend >= 0) return 'Bearish Divergence';
-      else return 'No clear divergence';
-    }
-    
-    // Open popup showing last 5 weeks details and a line chart (price and RSI)
-    function openPopup(coinId) {
-      let popup = document.getElementById('popup');
-      let popupContent = document.getElementById('popupContent');
-      let analysis = coinAnalysisData[coinId];
-      if (!analysis) return;
-      
-      let html = `<h2>${analysis.name} Details</h2>`;
-      html += `<table>
-                <tr>
-                  <th>Week</th>
-                  <th>Close Price (USD)</th>
-                  <th>RSI (14)</th>
-                </tr>`;
-      analysis.last5Weeks.forEach((week, index) => {
-        html += `<tr>
-                  <td>${index + 1}</td>
-                  <td>${week.close.toFixed(2)}</td>
-                  <td>${analysis.last5RSI[index].toFixed(2)}</td>
-                </tr>`;
-      });
-      html += `</table>`;
-      // Insert a canvas element for the chart.
-      html += `<div id="chartContainer"><canvas id="chartCanvas"></canvas></div>`;
-      popupContent.innerHTML = html;
-      popup.style.display = 'flex';
-      
-      // Create or update the Chart.js chart showing Price and RSI trends.
-      let ctx = document.getElementById('chartCanvas').getContext('2d');
-      if (popupChart) {
-        popupChart.destroy();
-      }
-      popupChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5'],
-          datasets: [
-            {
-              label: 'Price (USD)',
-              data: analysis.weeklyPrices,
-              borderColor: 'blue',
-              backgroundColor: 'rgba(0,0,255,0.1)',
-              yAxisID: 'y',
-              fill: false,
-              tension: 0.1,
-              pointRadius: 5
-            },
-            {
-              label: 'RSI (14)',
-              data: analysis.last5RSI,
-              borderColor: 'red',
-              backgroundColor: 'rgba(255,0,0,0.1)',
-              yAxisID: 'y1',
-              fill: false,
-              tension: 0.1,
-              pointRadius: 5
-            }
-          ]
-        },
-        options: {
-          scales: {
-            y: {
-              type: 'linear',
-              position: 'left',
-              title: {
-                display: true,
-                text: 'Price'
-              }
-            },
-            y1: {
-              type: 'linear',
-              position: 'right',
-              title: {
-                display: true,
-                text: 'RSI'
-              },
-              grid: {
-                drawOnChartArea: false
-              },
-              min: 0,
-              max: 100
-            }
-          }
-        }
-      });
-    }
-    
-    function closePopup() {
-      document.getElementById('popup').style.display = 'none';
-    }
-  </script>
-</body>
-</html>
+    // Group daily data into weekly candles (using consecutive groups of
