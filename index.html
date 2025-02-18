@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Coin Divergence Analyzer</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      padding: 20px;
+    }
+    #container {
+      max-width: 900px;
+      margin: auto;
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background-color: #eaeaea;
+    }
+    input[type="text"] {
+      width: 300px;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      padding: 8px 12px;
+      margin-left: 8px;
+      background-color: #007BFF;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:disabled {
+      background-color: #aaa;
+      cursor: not-allowed;
+    }
+    #manualAdd {
+      margin-top: 20px;
+    }
+    /* Popup styling */
+    #popup {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    #popupContentContainer {
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      position: relative;
+      max-width: 500px;
+      width: 90%;
+    }
+    #popupClose {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h1>Coin Divergence Analyzer</h1>
+    
+    <table>
+      <thead>
+        <tr>
+          <th>Coin</th>
+          <th>Symbol</th>
+          <th>Divergence</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="coinTableBody">
+        <!-- Rows will be added here -->
+      </tbody>
+    </table>
+    
+    <div id="manualAdd">
+      <label for="addCoinInput"><strong>Add Coin (by ID, e.g. "achusdt"):</strong></label>
+      <input type="text" id="addCoinInput" placeholder="Enter coin id">
+      <button id="addCoinButton">Add Coin</button>
+    </div>
+  </div>
+  
+  <!-- Popup for coin details -->
+  <div id="popup">
+    <div id="popupContentContainer">
+      <span id="popupClose">&times;</span>
+      <div id="popupContent"></div>
+    </div>
+  </div>
+  
+  <script>
+    // Global object to store analysis details for each coin (keyed by coin id)
+    let coinAnalysisData = {};
+
+    document.addEventListener('DOMContentLoaded', function() {
+      fetchTopCoins();
+      document.getElementById('addCoinButton').addEventListener('click', manualAddCoin);
+      document.getElementById('popupClose').addEventListener('click', closePopup);
+    });
+    
+    // Fetch top 150 coins by market cap from CoinGecko and create table rows
+    function fetchTopCoins() {
+      fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=1&sparkline=false')
+      .then(response => response.json())
+      .then(data => {
+        let tableBody = document.getElementById('coinTableBody');
+        data.forEach(coin => {
+          let row = document.createElement('tr');
+          row.setAttribute('data-coin-id', coin.id);
+          row.innerHTML = `
+            <td>${coin.name}</td>
+            <td>${coin.symbol.toUpperCase()}</td>
+            <td class="divergence">Loading...</td>
+            <td><button class="detailsButton" disabled>Details</button></td>
+          `;
+          tableBody.appendChild(row);
+          // Analyze coin data (asynchronously)
+          analyzeCoinData(coin.id, coin.name, function(result) {
+            if (result.error) {
+              updateRow(coin.id, "Error");
+            } else {
+              updateRow(coin.id, result.divergence);
+              // Save analysis details for popup
+              coinAnalysisData[coin.id] = {
+                name: coin.name,
+                last5Weeks: result.last5Weeks,
+                last5RSI: result.last5RSI
+              };
+              // Enable Details button and attach click event
+              let rowElem = document.querySelector(`tr[data-coin-id="${coin.id}"]`);
+              let detailsButton = rowElem.querySelector('.detailsButton');
+              detailsButton.disabled = false;
+              detailsButton.addEventListener('click', function() {
+                openPopup(coin.id);
+              });
+            }
+          });
+        });
+      })
+      .catch(err => {
+        console.error('Error fetching top coins:', err);
+      });
+    }
+    
+    // Update the divergence cell in the row for a given coin
+    function updateRow(coinId, divergence) {
+      let row = document.querySelector(`tr[data-coin-id="${coinId}"]`);
+      if (row) {
+        row.querySelector('.divergence').innerText = divergence;
+      }
+    }
+    
+    // Manual add coin: fetch coin data and append row to the table.
+    function manualAddCoin() {
+      let input = document.getElementById('addCoinInput');
+      let coinInput = input.value.trim().toLowerCase();
+      if (!coinInput) return;
+      
+      // Check if coin already exists in the table
+      if (document.querySelector(`tr[data-coin-id="${coinInput}"]`)) {
+        alert('Coin already exists in the table.');
+        input.value = '';
+        return;
+      }
+      
+      let tableBody = document.getElementById('coinTableBody');
+      let row = document.createElement('tr');
+      row.setAttribute('data-coin-id', coinInput);
+      // For manual entries, we use the coin id for both name and symbol (uppercased)
+      row.innerHTML = `
+        <td>${coinInput.toUpperCase()}</td>
+        <td>${coinInput.toUpperCase()}</td>
+        <td class="divergence">Loading...</td>
+        <td><button class="detailsButton" disabled>Details</button></td>
+      `;
+      tableBody.appendChild(row);
+      input.value = '';
+      
+      analyzeCoinData(coinInput, coinInput.toUpperCase(), function(result) {
+        if (result.error) {
+          updateRow(coinInput, "Error");
+        } else {
+          updateRow(coinInput, result.divergence);
+          coinAnalysisData[coinInput] = {
+            name: coinInput.toUpperCase(),
+            last5Weeks: result.last5Weeks,
+            last5RSI: result.last5RSI
+          };
+          let rowElem = document.querySelector(`tr[data-coin-id="${coinInput}"]`);
+          let detailsButton = rowElem.querySelector('.detailsButton');
+          detailsButton.disabled = false;
+          detailsButton.addEventListener('click', function() {
+            openPopup(coinInput);
+          });
+        }
+      });
+    }
+    
+    // Analyze a coin: fetch market_chart data, compute weekly candles, RSI (period 14) and divergence.
+    // Expects at least 150 days of data (which should yield ~21 weeks).
+    function analyzeCoinData(coinId, coinName, callback) {
+      fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=150`)
+      .then(response => response.json())
+      .then(data => {
+        if (!data.prices) {
+          callback({ error: true });
+          return;
+        }
+        let weeklyData = getWeeklyData(data.prices);
+        // Require at least 19 weeks (14 for RSI and then 5 valid weeks)
+        if (weeklyData.length < 19) {
+          callback({ error: true });
+          return;
+        }
+        const period = 14;
+        let closingPrices = weeklyData.map(w => w.close);
+        let rsiValues = computeRSI(closingPrices, period);
+        // Get last 5 weeks and their RSI values
+        let last5Weeks = weeklyData.slice(-5);
+        let last5RSI = rsiValues.slice(-5);
+        let divergence = analyzeDivergence(last5Weeks, last5RSI);
+        callback({
+          divergence: divergence,
+          last5Weeks: last5Weeks,
+          last5RSI: last5RSI
+        });
+      })
+      .catch(err => {
+        console.error('Error fetching data for coin', coinId, err);
+        callback({ error: true });
+      });
+    }
+    
+    // Group daily price data into weekly candles (using groups of 7 data points)
+    function getWeeklyData(prices) {
+      let weeks = [];
+      for (let i = 0; i < prices.length; i += 7) {
+        let weekSlice = prices.slice(i, i + 7);
+        if (weekSlice.length > 0) {
+          let lastEntry = weekSlice[weekSlice.length - 1];
+          weeks.push({
+            timestamp: lastEntry[0],
+            close: lastEntry[1]
+          });
+        }
+      }
+      return weeks;
+    }
+    
+    // Compute RSI using the standard Wilder smoothing method.
+    // Returns an array of RSI values (aligned with closing prices).
+    function computeRSI(closes, period) {
+      let rsi = [];
+      let gains = [];
+      let losses = [];
+      
+      for (let i = 1; i < closes.length; i++) {
+        let change = closes[i] - closes[i - 1];
+        gains.push(change > 0 ? change : 0);
+        losses.push(change < 0 ? Math.abs(change) : 0);
+      }
+      
+      let avgGain = average(gains.slice(0, period));
+      let avgLoss = average(losses.slice(0, period));
+      let firstRSI = avgLoss === 0 ? 100 : 100 - (100 / (1 + (avgGain / avgLoss)));
+      
+      for (let i = 0; i < period; i++) {
+        rsi.push(NaN);
+      }
+      rsi.push(firstRSI);
+      
+      for (let i = period + 1; i < closes.length; i++) {
+        let change = closes[i] - closes[i - 1];
+        let gain = change > 0 ? change : 0;
+        let loss = change < 0 ? Math.abs(change) : 0;
+        avgGain = ((avgGain * (period - 1)) + gain) / period;
+        avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+        let currentRSI = avgLoss === 0 ? 100 : 100 - (100 / (1 + (avgGain / avgLoss)));
+        rsi.push(currentRSI);
+      }
+      
+      while (rsi.length < closes.length) {
+        rsi.push(NaN);
+      }
+      
+      return rsi;
+    }
+    
+    function average(arr) {
+      return arr.length === 0 ? 0 : arr.reduce((sum, val) => sum + val, 0) / arr.length;
+    }
+    
+    // Determine divergence based on the last 5 weekly candles.
+    // If RSI is trending upward while price is flat or down, it's Bullish Divergence.
+    // If RSI is trending downward while price is up, it's Bearish Divergence.
+    function analyzeDivergence(weeks, rsiValues) {
+      if (weeks.length < 5 || rsiValues.length < 5) return 'Insufficient data';
+      
+      let priceStart = weeks[0].close;
+      let priceEnd = weeks[weeks.length - 1].close;
+      let rsiStart = rsiValues[0];
+      let rsiEnd = rsiValues[rsiValues.length - 1];
+      
+      let priceTrend = priceEnd - priceStart;  // flat or down: <=0
+      let rsiTrend = rsiEnd - rsiStart;          // rising: >0
+      
+      if (rsiTrend > 0 && priceTrend <= 0) {
+        return 'Bullish Divergence';
+      } else if (rsiTrend < 0 && priceTrend >= 0) {
+        return 'Bearish Divergence';
+      } else {
+        return 'No clear divergence';
+      }
+    }
+    
+    // Popup functions: open and close the details popup for a coin.
+    function openPopup(coinId) {
+      let popup = document.getElementById('popup');
+      let popupContent = document.getElementById('popupContent');
+      let analysis = coinAnalysisData[coinId];
+      if (!analysis) return;
+      
+      let html = `<h2>${analysis.name} Details</h2>`;
+      html += `<table>
+                <tr>
+                  <th>Week</th>
+                  <th>Close Price (USD)</th>
+                  <th>RSI (14)</th>
+                </tr>`;
+      analysis.last5Weeks.forEach((week, index) => {
+        html += `<tr>
+                  <td>${index + 1}</td>
+                  <td>${week.close.toFixed(2)}</td>
+                  <td>${analysis.last5RSI[index].toFixed(2)}</td>
+                </tr>`;
+      });
+      html += `</table>`;
+      popupContent.innerHTML = html;
+      popup.style.display = 'flex';
+    }
+    
+    function closePopup() {
+      document.getElementById('popup').style.display = 'none';
+    }
+  </script>
+</body>
+</html>
