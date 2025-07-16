@@ -100,7 +100,7 @@
     };
 
     const getProximityPercentage = tf => {
-      const map = { '1m': 0.005, '3m': 0.007, '5m': 0.01, '15m': 0.012, '30m': 0.015, '1h': 0.018, '4h': 0.02, '1d': 0.025, '1w': 0.03 };
+      const map = { '1m': 0.005, '3m': 0.007, '5m': 0.01, '15m': 0.012, '30m': 0.015, '1h': 0.018, '4h': 0.02, '1d': 0.025, '1w': 0.05 };
       return map[tf] || 0.02;
     };
 
@@ -122,14 +122,15 @@
       candles.filter(c => Math.abs(c.high - level) / level < threshold).length;
 
     const findFVGTargets = (candles, breakoutPrice) => {
-      const gaps = [];
-      for (let i = 5; i < candles.length - 2; i++) {
-        const gap = candles[i].low - candles[i - 1].high;
-        if (gap > 0.002 * breakoutPrice && candles[i].low > breakoutPrice) {
-          gaps.push(candles[i].low);
+      const fvg = [];
+      for (let i = 2; i < candles.length - 2; i++) {
+        const prevHigh = candles[i - 1].high;
+        const nextLow = candles[i + 1].low;
+        if (nextLow > prevHigh && nextLow > breakoutPrice && (nextLow - prevHigh) / breakoutPrice > 0.01) {
+          fvg.push({ level: nextLow, gap: nextLow - prevHigh });
         }
       }
-      return [...new Set(gaps)].sort((a, b) => a - b).slice(0, 2);
+      return fvg.sort((a, b) => b.gap - a.gap).slice(0, 2).map(f => f.level);
     };
 
     async function fetchBreakouts(tf) {
@@ -156,9 +157,10 @@
             return acc + Math.max(c.high - c.low, Math.abs(c.high - prev), Math.abs(c.low - prev));
           }, 0) / 14;
 
-          const nearResistance = Math.abs(last.close - resistance) / resistance <= proximity;
+          const priceToResistance = (last.close - resistance) / resistance;
+          const withinRange = Math.abs(priceToResistance) <= proximity;
 
-          if (nearResistance && touches >= 3 && last.volume > avgVol * 1.5) {
+          if (touches >= 3 && withinRange && last.volume > avgVol * 1.5) {
             const entry = last.close;
             const stop = entry - atr * 1.5;
             const targets = findFVGTargets(candles, entry);
@@ -171,7 +173,8 @@
               atr: atr.toFixed(6),
               avg_vol: avgVol.toFixed(2),
               vol: last.volume.toFixed(2),
-              touches
+              touches,
+              priceToResistance: (priceToResistance * 100).toFixed(2) + '%'
             });
           }
         } catch (e) {
@@ -190,6 +193,7 @@
             <p><span class="label">Entry:</span> ${t.entry}</p>
             <p><span class="label">Resistance:</span> ${t.resistance}</p>
             <p><span class="label">Touches:</span> ${t.touches}</p>
+            <p><span class="label">% from Resistance:</span> ${t.priceToResistance}</p>
             <p><span class="label">Stop Loss:</span> ${t.stop_loss}</p>
             <p><span class="label">FVG Targets:</span> ${t.fvg_targets.join(' → ')}</p>
             <p><span class="label">ATR:</span> ${t.atr}</p>
