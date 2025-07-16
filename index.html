@@ -2,179 +2,206 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Improved Breakout Scanner</title>
+  <title>Breakout Scanner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body {
       background-color: #111;
       color: #eee;
       font-family: Arial, sans-serif;
-      padding: 20px;
+      padding: 10px;
+      margin: 0;
+    }
+    h1, h2 {
+      text-align: center;
     }
     h1 {
       color: #00ffae;
-      font-size: 24px;
+      font-size: 6vw;
     }
-    .trade-box {
-      background: #1e1e1e;
-      border: 1px solid #333;
-      border-radius: 10px;
-      padding: 15px;
-      margin-bottom: 20px;
-    }
-    .trade-box h2 {
+    h2 {
       color: #ffce00;
+      font-size: 5vw;
     }
     .label {
       color: #999;
+      display: inline-block;
+      min-width: 40%;
     }
-    #log-console {
+    .log-console {
       background: #222;
       color: #0f0;
-      font-size: 14px;
+      font-size: 3vw;
       padding: 10px;
-      margin-top: 20px;
+      margin-top: 10px;
       border: 1px solid #444;
       border-radius: 8px;
       max-height: 200px;
       overflow-y: auto;
       white-space: pre-wrap;
     }
+    .trade-box {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 10px;
+      margin: 10px 0;
+      font-size: 4vw;
+    }
+    select, button {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      background: #222;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 5px;
+      font-size: 4vw;
+    }
+    @media (min-width: 768px) {
+      h1 { font-size: 2em; }
+      h2 { font-size: 1.5em; }
+      .trade-box { font-size: 1em; }
+      .log-console { font-size: 0.9em; }
+      select, button { font-size: 1em; }
+    }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/ccxt@4.1.96/dist/ccxt.browser.js"></script>
 </head>
 <body>
-  <h1>🚀 Improved Breakout Trade Scanner (15m Binance Spot, Ranks 51–80)</h1>
-  <p>Detects breakout setups with fair value gap (FVG) targets based on real price structure, not fixed %.</p>
-
-  <div id="trades">Loading...</div>
-  <div id="log-console">🔍 Starting scan...</div>
+  <h1>🚀 Breakout Scanner (Ranks 30–150, Binance)</h1>
+  <label for="timeframe">Select Timeframe:</label>
+  <select id="timeframe">
+    <option value="1m">1 Minute</option>
+    <option value="3m">3 Minutes</option>
+    <option value="5m">5 Minutes</option>
+    <option value="15m" selected>15 Minutes</option>
+    <option value="30m">30 Minutes</option>
+    <option value="1h">1 Hour</option>
+    <option value="4h">4 Hours</option>
+    <option value="1d">1 Day</option>
+    <option value="1w">1 Week</option>
+  </select>
+  <button id="scanButton">🔍 Search Breakouts</button>
+  <div id="trades"></div>
+  <div class="log-console" id="log-console">Ready.</div>
 
   <script>
     const container = document.getElementById("trades");
     const logConsole = document.getElementById("log-console");
+    const timeframeSelect = document.getElementById("timeframe");
+    const scanButton = document.getElementById("scanButton");
+    const BINANCE_API = 'https://api.binance.com';
 
-    function log(msg) {
-      logConsole.innerText += `\n${msg}`;
-    }
+    const log = msg => logConsole.innerText += `\n${msg}`;
 
-    function countTouches(candles, zone, threshold = 0.003) {
-      return candles.filter(c => Math.abs(c.high - zone) / zone < threshold).length;
-    }
+    const getCandleCount = tf => {
+      const map = { '1m': 200, '3m': 180, '5m': 150, '15m': 120, '30m': 100, '1h': 80, '4h': 60, '1d': 50, '1w': 30 };
+      return map[tf] || 100;
+    };
 
-    function findFVGTargets(candles, breakoutPrice) {
-      const fvgCandidates = [];
+    const getProximityPercentage = tf => {
+      const map = { '1m': 0.005, '3m': 0.007, '5m': 0.01, '15m': 0.012, '30m': 0.015, '1h': 0.018, '4h': 0.02, '1d': 0.025, '1w': 0.03 };
+      return map[tf] || 0.02;
+    };
+
+    const fetchTickers = async () => {
+      const res = await fetch(`${BINANCE_API}/api/v3/ticker/24hr`);
+      const data = await res.json();
+      return data.filter(d => d.symbol.endsWith('USDT') && !d.symbol.includes('UP') && !d.symbol.includes('DOWN'))
+        .map(d => ({ symbol: d.symbol, volume: parseFloat(d.quoteVolume) }))
+        .sort((a, b) => b.volume - a.volume);
+    };
+
+    const fetchCandles = async (symbol, tf, limit) => {
+      const res = await fetch(`${BINANCE_API}/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=${limit}`);
+      const data = await res.json();
+      return data.map(c => ({ time: c[0], open: +c[1], high: +c[2], low: +c[3], close: +c[4], volume: +c[5] }));
+    };
+
+    const countTouches = (candles, level, threshold) =>
+      candles.filter(c => Math.abs(c.high - level) / level < threshold).length;
+
+    const findFVGTargets = (candles, breakoutPrice) => {
+      const gaps = [];
       for (let i = 5; i < candles.length - 2; i++) {
-        const prev = candles[i - 1];
-        const curr = candles[i];
-        const gap = curr.low - prev.high;
-
-        if (gap > 0.002 * breakoutPrice && curr.low > breakoutPrice) {
-          fvgCandidates.push(curr.low);
+        const gap = candles[i].low - candles[i - 1].high;
+        if (gap > 0.002 * breakoutPrice && candles[i].low > breakoutPrice) {
+          gaps.push(candles[i].low);
         }
       }
-      return [...new Set(fvgCandidates)].sort((a, b) => a - b).slice(0, 2);
-    }
+      return [...new Set(gaps)].sort((a, b) => a - b).slice(0, 2);
+    };
 
-    async function fetchBreakouts() {
-      container.innerHTML = "Scanning charts...";
-      const exchange = new ccxt.binance();
-
-      let tickers;
-      try {
-        log("Fetching tickers from Binance...");
-        tickers = await exchange.fetchTickers();
-      } catch (e) {
-        log("Failed to fetch tickers: " + e.message);
-        return;
-      }
-
-      const usdtPairs = Object.entries(tickers)
-        .filter(([symbol]) => symbol.endsWith('/USDT') && !symbol.includes('UP') && !symbol.includes('DOWN'))
-        .map(([symbol, data]) => ({ symbol, volume: data.quoteVolume }))
-        .sort((a, b) => b.volume - a.volume);
-
-      const candidates = usdtPairs.slice(50, 80);
+    async function fetchBreakouts(tf) {
+      logConsole.innerText = "Starting scan...";
+      container.innerHTML = "";
+      const tickers = await fetchTickers();
+      const candidates = tickers.slice(30, 150);
       const setups = [];
+      const limit = getCandleCount(tf);
+      const proximity = getProximityPercentage(tf);
 
       for (const coin of candidates) {
         try {
           log(`Checking ${coin.symbol}`);
-          const ohlcv = await exchange.fetchOHLCV(coin.symbol, '15m', undefined, 100);
-          const candles = ohlcv.map(c => ({
-            time: c[0], open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5]
-          }));
-
-          const recentCandles = candles.slice(-40);
-          const highs = recentCandles.slice(0, -1).map(c => c.high);
-          const resistance = Math.max(...highs);
-          const touchCount = countTouches(recentCandles.slice(0, -1), resistance);
-          const last = recentCandles[recentCandles.length - 1];
-
-          const avgVolume = recentCandles.slice(0, -1).reduce((sum, c) => sum + c.volume, 0) / (recentCandles.length - 1);
-
-          const atr = recentCandles.slice(-15).reduce((acc, curr, i, arr) => {
+          const candles = await fetchCandles(coin.symbol, tf, limit);
+          const recent = candles.slice(-Math.min(40, candles.length));
+          const resistance = Math.max(...recent.slice(0, -1).map(c => c.high));
+          const touches = countTouches(recent.slice(0, -1), resistance, proximity);
+          const last = recent[recent.length - 1];
+          const avgVol = recent.slice(0, -1).reduce((a, c) => a + c.volume, 0) / (recent.length - 1);
+          const atr = recent.slice(-15).reduce((acc, c, i, arr) => {
             if (i === 0) return acc;
-            const prevClose = arr[i - 1].close;
-            const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prevClose), Math.abs(curr.low - prevClose));
-            return acc + tr;
+            const prev = arr[i - 1].close;
+            return acc + Math.max(c.high - c.low, Math.abs(c.high - prev), Math.abs(c.low - prev));
           }, 0) / 14;
 
-          if (
-            last.close > resistance &&
-            last.volume > avgVolume * 1.5 &&
-            touchCount >= 3
-          ) {
-            const entry = last.close;
-            const sl = entry - atr * 1.5;
-            const fvgTargets = findFVGTargets(candles, entry);
+          const nearResistance = Math.abs(last.close - resistance) / resistance <= proximity;
 
+          if (nearResistance && touches >= 3 && last.volume > avgVol * 1.5) {
+            const entry = last.close;
+            const stop = entry - atr * 1.5;
+            const targets = findFVGTargets(candles, entry);
             setups.push({
               symbol: coin.symbol,
               entry: entry.toFixed(6),
-              stop_loss: sl.toFixed(6),
-              fvg_targets: fvgTargets.map(x => x.toFixed(6)),
-              atr: atr.toFixed(6),
+              stop_loss: stop.toFixed(6),
               resistance: resistance.toFixed(6),
-              avg_vol: avgVolume.toFixed(2),
-              latest_vol: last.volume.toFixed(2),
-              touches: touchCount
+              fvg_targets: targets.map(x => x.toFixed(6)),
+              atr: atr.toFixed(6),
+              avg_vol: avgVol.toFixed(2),
+              vol: last.volume.toFixed(2),
+              touches
             });
-
-            log(`✅ Breakout: ${coin.symbol}`);
           }
-
-          if (setups.length >= 5) break;
-        } catch (err) {
-          log(`❌ Error on ${coin.symbol}: ${err.message}`);
+        } catch (e) {
+          log(`Error: ${coin.symbol} → ${e.message}`);
         }
       }
 
-      log("✅ Scan complete.");
+      log("Done scanning.");
       setTimeout(() => logConsole.style.display = 'none', 3000);
 
-      container.innerHTML = "";
-      if (setups.length === 0) {
-        container.innerHTML = "<p>No valid breakout setups now. Check again soon.</p>";
-        return;
-      }
-
-      setups.forEach(t => {
-        container.innerHTML += `
+      container.innerHTML = setups.length === 0
+        ? "<p>No breakout setups right now. Try again soon.</p>"
+        : setups.map(t => `
           <div class="trade-box">
             <h2>${t.symbol}</h2>
             <p><span class="label">Entry:</span> ${t.entry}</p>
             <p><span class="label">Resistance:</span> ${t.resistance}</p>
-            <p><span class="label">Touches at Resistance:</span> ${t.touches}</p>
+            <p><span class="label">Touches:</span> ${t.touches}</p>
             <p><span class="label">Stop Loss:</span> ${t.stop_loss}</p>
             <p><span class="label">FVG Targets:</span> ${t.fvg_targets.join(' → ')}</p>
-            <p><span class="label">ATR (15m):</span> ${t.atr}</p>
-            <p><span class="label">Volume (avg):</span> ${t.avg_vol} — <span class="label">Now:</span> ${t.latest_vol}</p>
+            <p><span class="label">ATR:</span> ${t.atr}</p>
+            <p><span class="label">Volume (avg):</span> ${t.avg_vol} — <span class="label">Now:</span> ${t.vol}</p>
           </div>
-        `;
-      });
+        `).join('');
     }
 
-    fetchBreakouts();
+    scanButton.addEventListener("click", () => {
+      const tf = timeframeSelect.value;
+      fetchBreakouts(tf);
+    });
   </script>
 </body>
 </html>
